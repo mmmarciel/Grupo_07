@@ -1,0 +1,147 @@
+cl
+
+if ~exist('a')
+% instantiate arduino object
+a = arduino('COM3','Mega2560')
+% attach servos for tilt and rotation at your prefered pins
+spin=0;%servo(a, 'D8');       
+tilt=0;%servo(a, 'D9');
+end
+
+% set the servos to middle position at startup (depends on you hardware)
+ti_mid=0.5;
+sp_mid=0.5;
+writePosition(tilt,ti_mid);
+writePosition(spin,sp_mid);  
+
+% initial servo positions
+sp_val=0.5;   
+sp_val_ant = 0.5;
+ti_val=0.5;
+% set target point to the middle of the image (depends on the image size)    
+x_mid=216;
+y_mid=120;
+
+% PI controller variables
+integ=[0;0];
+% PI constants for spin
+kps=0.005; 
+kis=0.005;
+% PI constants for tilt
+kpt=0.005; 
+kit=0.005;
+
+% use this to find out about your camera --> info.DeviceInfo.SupportedFormats
+% info = imaqhwinfo('winvideo');
+% capture the video frames using the videoinput function%
+% you have to replace the resolution & your installed adapter name.
+% specify your resolution here, second arg is internal cam (2) or usb cam (1)
+% obj = imaq.VideoDevice('winvideo',1,'MJPG_640x480');   
+obj = ipcam('http://10.41.74.169:8080/video')%usa camera IP do
+% celular
+% obj = imaq.VideoDevice('winvideo',1,'RGB24_432x240');
+% obj = imaq.VideoDevice('winvideo',1,'RGB24_960x544');
+
+% counter value
+idx=0;      
+
+% start the videoplayer
+videoplayer = vision.VideoPlayer; 
+
+% start the timer
+tic;
+
+% run for 100 loops
+while(idx < 1000)
+    idx=idx+1;
+    % grab an image for processing
+%     frame = step(obj);   
+    frame = snapshot(obj);
+%     imshow(frame);
+    
+    % detect the face with Viola-Jones algorithm
+    detection = vision.CascadeObjectDetector();
+    
+    % find bounding boxes
+    bboxes = step(detection, frame);
+    
+    if ~isempty(bboxes)
+        % draw bounding boxes
+        frame = insertObjectAnnotation(frame, 'rectangle', bboxes, 'Person','TextBoxOpacity', 0.4, 'FontSize', 10);
+    end
+    
+    % show the image
+    step(videoplayer, frame);               
+    
+    % PI servo control
+    if exist('bboxes')
+        if ~isempty(bboxes)
+          
+            % error vector
+            e=[ x_mid-(bboxes(1)+bboxes(3)/2);...
+                y_mid-(bboxes(2)+bboxes(4)/2)];
+            % scaling
+            e=e/10;  
+            
+            % control the spin servo
+            % integral part and anti wind up for the spin servo
+            if( sp_val>0.1 && sp_val<0.9 )          
+                integ(1)=integ(1)+e(1);
+            end
+            % PI controller for the spin servo    
+            sp_val=sp_mid+kps*e(1)+kis*integ(1);
+            % write the new servo position for the spin servo
+            if(sp_val>0.1 && sp_val<0.9)
+                if(sp_val>0.4 && sp_val<0.6)
+                     sp_val_ant = sp_val_ant;
+                else
+                    if(sp_val>sp_val_ant)
+                        dt = 0.001;
+                    else dt = -0.001; end
+                    for(i=sp_val_ant:dt:sp_val)
+                        new_sp_val = i;
+                        writePosition(spin,new_sp_val);
+                    end
+%                 elseif(sp_val<sp_val_ant)
+%                     for(i=sp_val:sp_val_ant)
+%                         new_sp_val = i;
+%                         writePosition(spin,new_sp_val);
+%                     end
+%                 end
+                    sp_val_ant = sp_val;
+                end
+            end
+            
+            % control the tilt servo
+            % integral part and anti wind up for the tilt servo
+            if( ti_val>0.1 && ti_val<0.9 )          
+                integ(2)=integ(2)+e(2);
+            end
+            % PI controller for the tilt servo 
+            ti_val=ti_mid-kpt*e(2)-kit*integ(2);
+            % write the new servo position for the tilt servo
+            if ( ti_val>0.1 && ti_val<0.9 )
+                writePosition(tilt,ti_val);
+            end          
+        end
+    end 
+ 
+    looptime(idx)=toc; 
+ 
+    % use a loop time that is bounded from below (improves PI controller)
+    % if your computer is faster, you can go below 150ms
+    while(looptime(idx)<0.15) 
+        looptime(idx)=toc;
+    end
+    % start timer   
+    tic;
+end
+ 
+% set the servos to middle position at the end
+writePosition(spin,sp_mid);  
+writePosition(tilt,ti_mid);
+
+% clean up
+clear obj;
+release(videoplayer);
+disp('done')
