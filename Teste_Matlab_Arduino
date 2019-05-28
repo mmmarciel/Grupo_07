@@ -1,5 +1,5 @@
 cl
-
+//Com arduino mega
 if ~exist('a')
 % instantiate arduino object
 a = arduino('COM3','Mega2560')
